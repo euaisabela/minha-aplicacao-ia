@@ -1,74 +1,140 @@
-import { Image, StyleSheet, Platform } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { StyleSheet, Text, View, Button, Image, ActivityIndicator, Dimensions } from 'react-native';
+import { Camera } from 'expo-camera';
+import * as tf from '@tensorflow/tfjs';
+import * as cocoSsd from '@tensorflow-models/coco-ssd';
+import { bundleResourceIO } from '@tensorflow/tfjs-react-native'; // Necessário para Expo
 
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
+export default function App() {
+  const [hasPermission, setHasPermission] = useState<boolean | null>(null);
+  const [isModelReady, setIsModelReady] = useState(false);
+  const [cameraRef, setCameraRef] = useState<any>(null);  // O tipo da ref pode ser qualquer tipo
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [predictions, setPredictions] = useState<any[]>([]);
+  const [model, setModel] = useState<cocoSsd.ObjectDetection | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false); // Para mostrar o indicador de carregamento durante a análise
 
-export default function HomeScreen() {
+  const camera = useRef(null); // Melhor usar o useRef para referência da câmera
+
+  const screenWidth = Dimensions.get('window').width;
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setHasPermission(status === 'granted');
+    })();
+
+    const loadModel = async () => {
+      await tf.ready();
+      const model = await cocoSsd.load();
+      setModel(model);
+      setIsModelReady(true);
+    };
+
+    loadModel();
+  }, []);
+
+  const takePhoto = async () => {
+    if (cameraRef) {
+      const photo = await cameraRef.takePictureAsync();
+      setPhotoUri(photo.uri);
+      analyzePhoto(photo.uri);
+    }
+  };
+
+  const analyzePhoto = async (uri: string) => {
+    setIsProcessing(true);
+
+    // Carregar a imagem como um tensor para análise
+    const response = await fetch(uri);
+    const imageBlob = await response.blob();
+    const imageBitmap = await createImageBitmap(imageBlob);
+
+    // Preparar a imagem para o TensorFlow
+    const imageTensor = tf.browser.fromPixels(imageBitmap);
+    const predictions = await model.detect(imageTensor);
+
+    setPredictions(predictions);
+    setIsProcessing(false);
+  };
+
+  if (hasPermission === null) {
+    return <Text>Solicitando permissão para acessar a câmera...</Text>;
+  }
+
+  if (hasPermission === false) {
+    return <Text>Sem acesso à câmera.</Text>;
+  }
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12'
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          Tap the Explore tab to learn more about what's included in this starter app.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          When you're ready, run{' '}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+    <View style={styles.container}>
+      {!isModelReady ? (
+        <View style={styles.loader}>
+          <Text>Carregando modelo...</Text>
+          <ActivityIndicator size="large" color="#0000ff" />
+        </View>
+      ) : (
+        <Camera style={styles.camera} ref={(ref) => setCameraRef(ref)}>
+          <View style={styles.controls}>
+            <Button title="Tirar Foto" onPress={takePhoto} />
+          </View>
+        </Camera>
+      )}
+
+      {photoUri && (
+        <View style={styles.result}>
+          <Image source={{ uri: photoUri }} style={[styles.preview, { width: screenWidth - 40, height: (screenWidth - 40) * (3 / 4) }]} />
+          <Text>Resultados:</Text>
+          {isProcessing ? (
+            <ActivityIndicator size="large" color="#0000ff" />
+          ) : (
+            predictions.length > 0 ? (
+              predictions.map((p, index) => (
+                <Text key={index}>
+                  {p.class}: {(p.score * 100).toFixed(2)}%
+                </Text>
+              ))
+            ) : (
+              <Text>Sem objetos detectados.</Text>
+            )
+          )}
+        </View>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  camera: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'flex-end',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
+  controls: {
     position: 'absolute',
+    bottom: 20,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loader: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  result: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  preview: {
+    borderRadius: 10,
+    marginBottom: 10,
   },
 });
